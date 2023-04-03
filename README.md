@@ -19,7 +19,9 @@ To run this project, you need to have the following packages installed:
 - torchvision 0.10.0 or later
 - NumPy 1.19.5 or later
 - tqdm 4.62.3 or later
-
+- matplotlib 3.4.3 or later
+- scikit-learn 0.24.2 or later
+    
 You can install the required packages using the following command:
 
 ```bash
@@ -50,7 +52,7 @@ This script will train the model on 70% of the dataset, validate it on 20% of th
 
 ## Customization
 
-You can customize the model architecture, training parameters, and dataset split ratios by modifying the ForestFireDetector class instantiation and its method calls in the forest_fire_detector.py script. For example, you can change the model type, number of classes, learning rate, and batch size as needed.
+You can customize the model architecture, training parameters, and dataset split ratios by modifying the forest_fire_detector.py script. For example, you can change the model type, number of classes, learning rate, and batch size as needed.
 
 ## License
 This project is licensed under the [MIT License](LICENSE).
