@@ -1,3 +1,5 @@
+#Importing the Libraries
+import os
 import torch
 import numpy as np
 from tqdm import tqdm
@@ -18,6 +20,7 @@ class CustomDataset(datasets.ImageFolder):
             transform = transforms.Compose([
                 transforms.Resize(224),
                 transforms.CenterCrop(224),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor(),
                 transforms.Normalize(mean=mean, std=std)
             ])
@@ -25,6 +28,7 @@ class CustomDataset(datasets.ImageFolder):
             transform = transforms.Compose([
                 transforms.Resize(256),
                 transforms.CenterCrop(224),
+                transforms.RandomHorizontalFlip(),
                 transforms.ToTensor()
             ])
         super().__init__(data_dir, transform=transform, *args, **kwargs)
@@ -37,7 +41,9 @@ class CustomDataset(datasets.ImageFolder):
         var = 0.0
         num_samples = 0
 
-        for images, _ in dataloader:
+        progress_bar = tqdm(dataloader, desc="Analyzing the Dataset")
+
+        for images, _ in progress_bar:
             batch_samples = images.size(0)
             images = images.view(batch_samples, images.size(1), -1)
             mean += images.mean(2).sum(0)
@@ -120,12 +126,12 @@ class ImageClassifier:
                 y_pred.extend(predicted.cpu().numpy())
                 y_score.extend(probabilities[:, 1].cpu().numpy())
 
-        accuracy = accuracy_score(y_true, y_pred)
-        precision = precision_score(y_true, y_pred)
-        recall = recall_score(y_true, y_pred)
-        f1 = f1_score(y_true, y_pred)
+        accuracy = np.round(accuracy_score(y_true, y_pred), 3)
+        precision = np.round(precision_score(y_true, y_pred), 3)
+        recall = np.round(recall_score(y_true, y_pred), 3)
+        f1 = np.round(f1_score(y_true, y_pred), 3)
         conf_matrix = confusion_matrix(y_true, y_pred)
-        auc = roc_auc_score(y_true, y_score)
+        auc = np.round(roc_auc_score(y_true, y_score), 3)
         fpr, tpr, _ = roc_curve(y_true, y_score)
 
         print(f"Accuracy: {accuracy}")
@@ -146,19 +152,43 @@ class ImageClassifier:
         plt.legend(loc="lower right")
         plt.show()
 
+#Function to train model for 'num_epochs' epochs
+def train_model(classifier, train_loader, validation_loader, num_epochs, model_save_path):
+    best_val_accuracy = 0
+    early_stop_threshold = 99.5
+    for epoch in range(num_epochs):
+        classifier.train_epoch(train_loader, epoch, num_epochs)
+
+        # Validating the model
+        val_accuracy = classifier.validate(validation_loader)
+        print(f'Accuracy on validation set for epoch {epoch + 1}: {np.round(val_accuracy, 3)}%')
+
+        # Saving the best model based on validation accuracy
+        if val_accuracy > best_val_accuracy:
+            best_val_accuracy = val_accuracy
+            best_model = deepcopy(classifier.model)
+            torch.save(best_model.state_dict(), model_save_path)
+            print("Model updated")
+
+            # Checking if the validation accuracy is greater than the early stop threshold
+            if best_val_accuracy >= early_stop_threshold:
+                print(f"Early stopping at epoch {epoch + 1} as the validation accuracy reached {early_stop_threshold}%")
+                break
+    return best_model
+
 def main():
     data_dir = 'Dataset'
-    # Load dataset without normalization to compute mean and std
+    # Loading dataset without normalization to compute mean and std
     unnormalized_dataset = CustomDataset(data_dir)
     mean, std = CustomDataset.calculate_mean_std(unnormalized_dataset)
     print(f"Mean: {mean}, Standard Deviation: {std}")
 
-    # Load normalized dataset
+    # Loading normalized dataset
     dataset = CustomDataset(data_dir, mean, std)
 
     # Splitting the dataset into training, validation, and testing sets
-    train_size = int(0.7 * len(dataset))
-    validation_size = int(0.2 * len(dataset))
+    train_size = int(0.6 * len(dataset))
+    validation_size = int(0.3 * len(dataset))
     test_size = len(dataset) - train_size - validation_size
     train_dataset, validation_dataset, test_dataset = random_split(dataset, [train_size, validation_size, test_size])
 
@@ -175,7 +205,7 @@ def main():
     criterion = nn.CrossEntropyLoss()
     optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
 
-    # Initialize the image classifier
+    # Initializing the image classifier
     num_epochs = 10
     best_val_accuracy = 0
     best_model = None
@@ -183,19 +213,27 @@ def main():
 
     classifier = ImageClassifier(model, criterion, optimizer)
 
-    for epoch in range(num_epochs):
-        classifier.train_epoch(train_loader, epoch, num_epochs)
+    # Check if the "best_model.pth" file exists
+    if os.path.exists(model_save_path):
+        user_input = input(f"{model_save_path} exists. Do you want to retrain the model? (yes/no): ").lower()
 
-        # Validating the model
-        val_accuracy = classifier.validate(validation_loader)
-        print(f'Accuracy on validation set for epoch {epoch + 1}: {np.round(val_accuracy, 3)}%')
+        if user_input == 'yes':
+            retrain = True
+        elif user_input == 'no':
+            retrain = False
+        else:
+            raise ValueError("Invalid input. Please enter 'yes' or 'no'.")
 
-        # Saving the best model based on validation accuracy
-        if val_accuracy > best_val_accuracy:
-            best_val_accuracy = val_accuracy
-            best_model = deepcopy(classifier.model)
-            torch.save(best_model.state_dict(), model_save_path)
-            print("Model updated")
+        if retrain:
+            best_model = train_model(classifier, train_loader, validation_loader, num_epochs, model_save_path)
+        else:
+            best_model = models.resnet50(pretrained=True)
+            num_features = best_model.fc.in_features
+            best_model.fc = nn.Linear(num_features, 2)
+            best_model.load_state_dict(torch.load(model_save_path))
+            best_model = best_model.cuda()
+    else:
+        best_model = train_model(classifier, train_loader, validation_loader, num_epochs, model_save_path)
 
     # Testing the best model
     best_classifier = ImageClassifier(best_model, criterion, optimizer)
