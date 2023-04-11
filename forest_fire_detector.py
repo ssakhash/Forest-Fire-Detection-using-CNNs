@@ -1,36 +1,41 @@
 #Importing the Libraries
 import os
 import torch
+import argparse
 import numpy as np
 from tqdm import tqdm
 import torch.nn as nn
 from copy import deepcopy
 import torch.optim as optim
 import matplotlib.pyplot as plt
-from torch.autograd import Variable
 from torchvision import datasets, models, transforms
 from torch.utils.data import DataLoader, random_split
 from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, confusion_matrix, roc_auc_score, roc_curve
 
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+def parse_args():
+    parser = argparse.ArgumentParser(description="Image Classification")
+    parser.add_argument("--data-dir", type=str, default="Dataset", help="Path to the dataset folder")
+    parser.add_argument("--batch-size", type=int, default=16, help="Batch size for training")
+    parser.add_argument("--learning-rate", type=float, default=0.001, help="Learning rate for the optimizer")
+    parser.add_argument("--num-epochs", type=int, default=10, help="Number of epochs to train")
+    parser.add_argument("--model-save-path", type=str, default="best_model.pth", help="Path to save the best model")
+    parser.add_argument("--retrain", action="store_true", help="Flag to retrain the model")
+    return parser.parse_args()
+
 # Custom dataset class that inherits from torchvision.datasets.ImageFolder
 class CustomDataset(datasets.ImageFolder):
     def __init__(self, data_dir, mean=None, std=None, *args, **kwargs):
-        # Apply different transforms based on whether mean and std are provided
+        transform_list = [
+            transforms.Resize(224),
+            transforms.CenterCrop(224),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor()
+        ]
         if mean is not None and std is not None:
-            transform = transforms.Compose([
-                transforms.Resize(224),
-                transforms.CenterCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                transforms.Normalize(mean=mean, std=std)
-            ])
-        else:
-            transform = transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor()
-            ])
+            transform_list.append(transforms.Normalize(mean=mean, std=std))
+        transform = transforms.Compose(transform_list)
         super().__init__(data_dir, transform=transform, *args, **kwargs)
 
     @staticmethod
@@ -63,13 +68,13 @@ class ImageClassifier:
         self.optimizer = optimizer
 
     # Function to train the model for one epoch
-    def train_epoch(self, train_loader, epoch, num_epochs):
+    def train_epoch(self, train_loader, epoch, num_epochs, device):
         self.model.train()
         running_loss = 0.0
         progress_bar = tqdm(enumerate(train_loader), total=len(train_loader), desc=f"Epoch {epoch+1}/{num_epochs}")
 
         for i, (inputs, labels) in progress_bar:
-            inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+            inputs, labels = inputs.to(device), labels.to(device)
             self.optimizer.zero_grad()
             outputs = self.model(inputs)
             loss = self.criterion(outputs, labels)
@@ -86,7 +91,7 @@ class ImageClassifier:
         total = 0
         with torch.no_grad():
             for inputs, labels in validation_loader:
-                inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+                inputs, labels = inputs.to(device), labels.to(device)
                 outputs = self.model(inputs)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
@@ -100,7 +105,7 @@ class ImageClassifier:
         total = 0
         with torch.no_grad():
             for inputs, labels in test_loader:
-                inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+                inputs, labels = inputs.to(device), labels.to(device)
                 outputs = self.model(inputs)
                 _, predicted = torch.max(outputs.data, 1)
                 total += labels.size(0)
@@ -117,7 +122,7 @@ class ImageClassifier:
 
         with torch.no_grad():
             for inputs, labels in test_loader:
-                inputs, labels = Variable(inputs.cuda()), Variable(labels.cuda())
+                inputs, labels = inputs.to(device), labels.to(device)
                 outputs = self.model(inputs)
                 probabilities = torch.softmax(outputs, dim=1)
                 _, predicted = torch.max(outputs.data, 1)
@@ -157,7 +162,7 @@ def train_model(classifier, train_loader, validation_loader, num_epochs, model_s
     best_val_accuracy = 0
     early_stop_threshold = 99.5
     for epoch in range(num_epochs):
-        classifier.train_epoch(train_loader, epoch, num_epochs)
+        classifier.train_epoch(train_loader, epoch, num_epochs, device)
 
         # Validating the model
         val_accuracy = classifier.validate(validation_loader)
@@ -176,8 +181,14 @@ def train_model(classifier, train_loader, validation_loader, num_epochs, model_s
                 break
     return best_model
 
-def main():
-    data_dir = 'Dataset'
+def main(args):
+    data_dir = args.data_dir
+    batch_size = args.batch_size
+    learning_rate = args.learning_rate
+    num_epochs = args.num_epochs
+    retrain = args.retrain
+    model_save_path = args.model_save_path
+
     # Loading dataset without normalization to compute mean and std
     unnormalized_dataset = CustomDataset(data_dir)
     mean, std = CustomDataset.calculate_mean_std(unnormalized_dataset)
@@ -187,51 +198,50 @@ def main():
     dataset = CustomDataset(data_dir, mean, std)
 
     # Splitting the dataset into training, validation, and testing sets
-    train_size = int(0.6 * len(dataset))
-    validation_size = int(0.3 * len(dataset))
-    test_size = len(dataset) - train_size - validation_size
+    train_size = int(0.6 * len(dataset))  # 60% of the dataset for training
+    validation_size = int(0.3 * len(dataset))  # 30% of the dataset for validation
+    test_size = len(dataset) - train_size - validation_size  # 10% of the dataset for testing
     train_dataset, validation_dataset, test_dataset = random_split(dataset, [train_size, validation_size, test_size])
 
-    train_loader = DataLoader(train_dataset, batch_size=16, shuffle=True)
-    validation_loader = DataLoader(validation_dataset, batch_size=16, shuffle=True)
-    test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+    validation_loader = DataLoader(validation_dataset, batch_size=batch_size, shuffle=True)
+    test_loader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
 
     # Loading the pre-trained model (Transfer Learning)
     model = models.resnet50(pretrained=True)
     num_features = model.fc.in_features
     model.fc = nn.Linear(num_features, 2)
-    model = model.cuda()
-
-    criterion = nn.CrossEntropyLoss()
-    optimizer = optim.SGD(model.parameters(), lr=0.001, momentum=0.9)
+    model = model.to(device)
 
     # Initializing the image classifier
-    num_epochs = 10
     best_val_accuracy = 0
     best_model = None
-    model_save_path = "best_model.pth"
 
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.SGD(model.parameters(), lr=learning_rate, momentum=0.9)
     classifier = ImageClassifier(model, criterion, optimizer)
 
-    # Check if the "best_model.pth" file exists
-    if os.path.exists(model_save_path):
-        user_input = input(f"{model_save_path} exists. Do you want to retrain the model? (yes/no): ").lower()
-
-        if user_input == 'yes':
+    if os.path.exists(model_save_path) and not retrain:
+        user_input = ''
+        while user_input not in ('yes', 'no'):
+            user_input = input(f"{model_save_path} exists. Do you want to retrain the model? (yes/no, default: \033[1myes\033[0m): ").lower()
+            if user_input == '':
+                user_input = 'yes'
+            if user_input not in ('yes', 'no', ''):
+                print("Invalid input. Please enter 'yes', 'no', or press Enter for the default option.")
+        
+        if user_input == 'yes' or user_input == '':
             retrain = True
         elif user_input == 'no':
             retrain = False
-        else:
-            raise ValueError("Invalid input. Please enter 'yes' or 'no'.")
 
-        if retrain:
-            best_model = train_model(classifier, train_loader, validation_loader, num_epochs, model_save_path)
-        else:
-            best_model = models.resnet50(pretrained=True)
-            num_features = best_model.fc.in_features
-            best_model.fc = nn.Linear(num_features, 2)
-            best_model.load_state_dict(torch.load(model_save_path))
-            best_model = best_model.cuda()
+    if os.path.exists(model_save_path) and not retrain:
+        print(f"Loading the existing model from '{model_save_path}'.")
+        best_model = models.resnet50(pretrained=True)
+        num_features = best_model.fc.in_features
+        best_model.fc = nn.Linear(num_features, 2)
+        best_model.load_state_dict(torch.load(model_save_path))
+        best_model = best_model.to(device)
     else:
         best_model = train_model(classifier, train_loader, validation_loader, num_epochs, model_save_path)
 
@@ -244,4 +254,5 @@ def main():
     best_classifier.calculate_metrics_and_plot_roc(test_loader)
 
 if __name__ == "__main__":
-    main()
+    args = parse_args()
+    main(args)
