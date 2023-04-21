@@ -1,4 +1,4 @@
-# Forest Fire Detection using CNNs
+# PyroVision: Harnessing ResNet-50 Transfer Learning for Forest Fire Detection
 
 This project implements a Convolutional Neural Network (CNN) based forest fire detection system using PyTorch. I have used a pre-trained ResNet-50 model, fine-tuned it on a custom dataset, and evaluated its performance on detecting forest fires from images.
 
